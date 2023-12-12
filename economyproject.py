@@ -32,13 +32,13 @@ class Firm:
         self.firm_type = firm_type
         self.cash = cash
         self.maximum_size = size
-        self.sold_last_year = -1
         self.good_in_storage = 0
+        self.sold_last_year = -1
     
     def produce_goods(self):
         # Get the effective size of the factory, currently equal to worker numbers
         self.get_effective_size()
-        # Primary producer, takes in no input goods
+        # Primary producer, takes in no input goods so can immediately produce goods
         if self.firm_type.level == 0:
             self.good_in_storage += self.firm_type.output_amount * self.effective_size * 100
             self.firm_type.output_good.amount_produced += self.firm_type.output_amount * self.effective_size * 100
@@ -55,8 +55,11 @@ class Firm:
                 self.desired_output = 10
             else:
                 raise Exception("Buying input goods produced last year messing up")
-            # if self.good_in_storage > 1000:
-            #     self.desired_output = 10
+            if round(self.good_in_storage) == 0:
+                self.desired_output += 10
+            elif self.good_in_storage > 1000:
+                self.desired_output -= 9
+            self.sold_last_year = 0
             for i in range(0, len(self.firm_type.input_goods)):
                 for firm_to_buy_from in firm_handler.all_firms[self.firm_type.level - 1]:
                     if self.cash > 0 and self.percent_of_inputs_aquired[i] < 1 and self.firm_type.input_goods[i] == firm_to_buy_from.firm_type.output_good:
@@ -69,7 +72,7 @@ class Firm:
                         self.cash -= self.amount_bought * self.firm_type.input_goods[i].price
                         self.percent_of_inputs_aquired[i] += self.amount_bought / (self.firm_type.input_amounts[i] * self.desired_output)
                         self.firm_type.input_goods[i].amount_sold += self.amount_bought
-                        print(self.firm_type.name, "bought", self.amount_bought, "for", self.amount_bought * self.firm_type.input_goods[i].price)
+                        print(self.firm_type.name, "bought", self.amount_bought, firm_to_buy_from.firm_type.output_good.name, "for", self.amount_bought * self.firm_type.input_goods[i].price)
             self.produce_output_good()
             
     
@@ -82,19 +85,19 @@ class Firm:
                 
     def decide_to_expand_firm(self):
         # If a firm has $25000 in reserve and no unused goods, then it'll expand for $10k
-        if self.cash > 25000 and self.good_in_storage == 0:
+        if self.cash > 25000 and self.good_in_storage < 1:
             self.cash -= 10000
             people.cash += 10000 # The extra cash goes to 'the economy' to be recycled
             self.maximum_size += 1
         # If a firm has a ton of goods in reserve it can shrink
-        elif self.maximum_size > 1 and people.cash > 15000 and self.good_in_storage > 1000:
+        elif self.maximum_size > 1 and people.cash > 15000 and self.good_in_storage > 10000:
             self.cash += 7500
             people.cash -= 7500
             self.maximum_size -= 1
     
     # Distributes workers. Currently assumed that all jobs are equally desired.
     def get_effective_size(self):
-        self.effective_size = floor(min(self.maximum_size, people.size * self.maximum_size / firm_handler.total_firm_sizes))
+        self.effective_size = floor(min(self.maximum_size, people.size * self.maximum_size / firm_handler.total_firm_sizes / 100))
         
 # The good handler handles all of the goods present.
 class GoodHandler:
@@ -121,19 +124,11 @@ class Good:
     def reset_daily_stats(self):
         self.amount_produced = 0
         self.amount_sold = 0
-        
-    def calculate_potential_demand(self):
-        self.potential_demand = 0
-        for firm_level in firm_handler.all_firms:
-            for firm in firm_level:
-                if self in firm.firm_type.input_goods:
-                    self.potential_demand += firm.firm_type.input_amounts[firm.firm_type.input_goods.index(self)] * firm.effective_size * 100
     
     def update_price(self):
-        self.calculate_potential_demand()
-        if self.amount_produced > self.amount_sold:
+        if self.amount_produced > self.amount_sold * 0.9:
             self.price -= 0.1
-        elif self.amount_produced < self.amount_sold:
+        elif self.amount_produced <= self.amount_sold:
             self.price += 0.1
         if self.price < 0.1:
             self.price = 0.1
@@ -144,41 +139,85 @@ class Population:
     def __init__(self, size, cash):
         self.size = size
         self.cash = cash
+        self.a = 0.5
+        self.b = 1
+        
+    def buy_tier_three_goods(self):
+        for firm in firm_handler.all_firms[2]:
+            firm.sold_last_year = 0
+        self.all_bought = True
+        for firm in firm_handler.all_firms[2]:
+            if firm.good_in_storage > 0:
+                self.all_bought = False
+                break
+        while self.cash > 0 and self.all_bought == False:
+            max_marginal_utility_gain = self.marginal_utility_function(firm_handler.all_firms[2][0].sold_last_year)
+            max_marginal_utility_index = 0
+            for i in range(1, len(firm_handler.all_firms[2])):
+                if len(firm_handler.all_firms[2]) > 1 and firm_handler.all_firms[2][i].good_in_storage > 0 and self.marginal_utility_function(firm_handler.all_firms[2][i].sold_last_year) > max_marginal_utility_gain:
+                    max_marginal_utility_gain = self.marginal_utility_function(firm_handler.all_firms[2][i]) > max_marginal_utility_gain
+                    max_marginal_utility_index = i
+            firm_handler.all_firms[2][max_marginal_utility_index].good_in_storage -= 1
+            firm_handler.all_firms[2][max_marginal_utility_index].cash += firm_handler.all_firms[2][max_marginal_utility_index].firm_type.output_good.price
+            self.cash -= firm_handler.all_firms[2][max_marginal_utility_index].firm_type.output_good.price
+            firm_handler.all_firms[2][max_marginal_utility_index].sold_last_year += 1
+            self.all_bought = True
+            for firm in firm_handler.all_firms[2]:
+                if firm.good_in_storage > 0:
+                    self.all_bought = False
+                    break
+    
+    def utility_function(self, x):
+        return self.b * pow(x, self.a)
+    
+    def marginal_utility_function(self, x):
+        if x > 0:
+            return self.utility_function(x) - self.utility_function(x-1)
+        else:
+            return 2
                 
 # Define goods
 good_handler = GoodHandler()
 good_handler.new_good("Timber", 1)
+good_handler.new_good("Crude Oil", 2)
 good_handler.new_good("Wooden Planks", 2)
+good_handler.new_good("Plastic", 3)
 good_handler.new_good("Furniture", 8)
-# good_handler.new_good("Intruments", 16)
+good_handler.new_good("Intruments", 16)
 
 # Define firm types
 TimberLogging = FirmType("Timber Logging", 0, [], [], good_handler.get_good("Timber"), 1)
+OilDrilling = FirmType("Oil Drill", 0, [], [], good_handler.get_good("Crude Oil"), 1)
 Sawmill = FirmType("Sawmill", 1, [good_handler.get_good("Timber")], [1], good_handler.get_good("Wooden Planks") , 1)
+PlasticsPlant = FirmType("Plastics Plant", 1, [good_handler.get_good("Crude Oil")], [1], good_handler.get_good("Plastic") , 1)
 FurnitureFactory = FirmType("Furniture", 2, [good_handler.get_good("Wooden Planks")], [2], good_handler.get_good("Furniture") , 1)
-# InstrumentFactory = FirmType("Intruments", 2, [good_handler.get_good("Wooden Planks")], [4], [good_handler.get_good("Intruments")] , [1])
+InstrumentFactory = FirmType("Intruments", 2, [good_handler.get_good("Wooden Planks"), good_handler.get_good("Plastic")], [4, 1], good_handler.get_good("Intruments") , 1)
 
 # Define firms
 firm_handler = FirmHandler()
 firm_handler.new_firm(TimberLogging, 0, 10)
 firm_handler.new_firm(Sawmill, 10000, 10)
 firm_handler.new_firm(FurnitureFactory, 10000, 5)
+firm_handler.new_firm(InstrumentFactory, 10000, 3)
+firm_handler.new_firm(OilDrilling, 0, 5)
+firm_handler.new_firm(PlasticsPlant, 10000, 5)
 
 # Define population
-people = Population(10000, 20000)
+people = Population(100000, 50000)
 
 # Wipe debug file
 open('output.txt', 'w').close()
 
 # Do daily cycle
 days_left = 3650
+starting_days_left = days_left
 while days_left > 0:
+    print("Day", starting_days_left - days_left)
     # Prepare firm checkbooks
     for firm_level in firm_handler.all_firms:
         for firm in firm_level:
             firm.last_year_profit = 0
             firm.starting_cash = firm.cash
-            firm.sold_last_year = 0
             
     # Prepare good balances
     for good in good_handler.all_goods:
@@ -191,13 +230,16 @@ while days_left > 0:
             firm.produce_goods()
     
     # Have the people buy all third-level outputs
-    for firm in firm_handler.all_firms[2]:
-        amount_to_buy = floor(min(people.cash / firm.firm_type.output_good.price, firm.good_in_storage)) # assuming infinite demand outside of price
-        firm.good_in_storage -= amount_to_buy
-        firm.cash += amount_to_buy * firm.firm_type.output_good.price
-        firm.sold_last_year += amount_to_buy
-        people.cash -= amount_to_buy * firm.firm_type.output_good.price
-        print("The people bought", amount_to_buy, firm.firm_type.name, "for", amount_to_buy * firm.firm_type.output_good.price)
+    people.buy_tier_three_goods()
+                
+    # The old system of buying -- much faster, but first-come-first-served, as with the rest
+    # for firm in firm_handler.all_firms[2]:
+    #     amount_to_buy = floor(min(people.cash / firm.firm_type.output_good.price, firm.good_in_storage)) # assuming infinite demand outside of price
+    #     firm.good_in_storage -= amount_to_buy
+    #     firm.cash += amount_to_buy * firm.firm_type.output_good.price
+    #     firm.sold_last_year += amount_to_buy
+    #     people.cash -= amount_to_buy * firm.firm_type.output_good.price
+    #     print("People bought", amount_to_buy, firm.firm_type.name, "for", amount_to_buy * firm.firm_type.output_good.price)
             
     # Firms pay their works half of profits
     # Prepare firm checkbooks
@@ -208,10 +250,10 @@ while days_left > 0:
             if firm.firm_type.level == 0:
                 people.cash += firm.cash
                 firm.cash = 0
-            # else:
+            else:
                 if firm.profit > 0:
-                    firm.cash -= floor(firm.profit * 5 / 10)
-                    people.cash += floor(firm.profit * 5 / 10)
+                    firm.cash -= floor(firm.profit / 2)
+                    people.cash += floor(firm.profit / 2)
     
     # Firms decide whether to expand or contract
     for firm_level in firm_handler.all_firms:
@@ -219,11 +261,10 @@ while days_left > 0:
             firm.decide_to_expand_firm()
     
     # Adjust good prices
-    for good in good_handler.all_goods:
-        good.update_price()
+    # for good in good_handler.all_goods:
+    #     good.update_price()
     
     # Get debug output, useful for graphing to see if money / goods are magically appearing (read: my min statement spaghetti blew up)
-    print()
     for firm_level in firm_handler.all_firms:
         for firm in firm_level:
             print(firm.firm_type.name, firm.maximum_size, "$" + str(round(firm.cash)), firm.good_in_storage, firm.sold_last_year)
@@ -235,6 +276,7 @@ while days_left > 0:
         # outputtxt.write(str(total_money_in_world) + '\n')
         # outputtxt.write(str(firm_handler.all_firms[1][0].cash) + '\n')
         outputtxt.write(str(people.cash) + '\n')
+    print()
     
     # Iterate to the next day
     days_left -= 1
