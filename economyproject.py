@@ -64,11 +64,12 @@ class Firm:
         # If a firm has $25000 in reserve and no unused goods, then it'll expand for $10k
         if self.cash > 25000 and min(self.good_in_storage_amounts) == 0:
             self.cash -= 10000
+            people.cash += 10000 # The extra cash goes to 'the economy' to be recycled
             self.maximum_size += 1
     
     # Distributes workers. Currently assumed that all jobs are equally desired.
     def get_effective_size(self):
-        self.effective_size = floor(min(self.maximum_size, total_population * self.maximum_size / firm_handler.total_firm_sizes))
+        self.effective_size = floor(min(self.maximum_size, people.size * self.maximum_size / firm_handler.total_firm_sizes))
         
 # The good handler handles all of the goods present.
 class GoodHandler:
@@ -89,6 +90,7 @@ class Good:
     def __init__(self, name, price):
         self.name = name
         self.price = price
+        self.base_price = price
     
     def update_price(self):
         self.leftover = 0
@@ -96,12 +98,23 @@ class Good:
             for firm in firm_level:
                 if self in  firm.firm_type.output_goods:
                     self.leftover += firm.good_in_storage_amounts[firm.firm_type.output_goods.index(self)]
+        if self.leftover < 1:
+            self.price += 0.1
+        elif self.leftover > 10000 and self.price > 0.1:
+            self.price -= 0.1
+        self.price = round(self.price, 1)
+
+# The population class represents the general population.
+class Population:
+    def __init__(self, size, cash):
+        self.size = size
+        self.cash = cash
                 
 # Define goods
 good_handler = GoodHandler()
 good_handler.new_good("Timber", 1)
 good_handler.new_good("Wooden Planks", 1.5)
-good_handler.new_good("Furniture", 6)
+good_handler.new_good("Furniture", 3)
 
 # Define firm types
 TimberLogging = FirmType("Timber Logging", 0, [], [], [good_handler.get_good("Timber")], [1])
@@ -110,33 +123,47 @@ FurnitureFactory = FirmType("Furniture", 2, [good_handler.get_good("Wooden Plank
 
 # Define firms
 firm_handler = FirmHandler()
-firm_handler.new_firm(TimberLogging, 1000, 1)
-firm_handler.new_firm(Sawmill, 1000, 1)
-firm_handler.new_firm(FurnitureFactory, 1000, 1)
+firm_handler.new_firm(TimberLogging, 10000, 1)
+firm_handler.new_firm(Sawmill, 10000, 1)
+firm_handler.new_firm(FurnitureFactory, 10000, 1)
 
 # Limit labor growth
-total_population = 10000
+people = Population(10000, 20000)
 
 # Wipe debug file
 open('output.txt', 'w').close()
 
 # Do daily cycle
-days_left = 365
+days_left = 36500
 while days_left > 0:
+    # Prepare firm checkbooks
+    for firm_level in firm_handler.all_firms:
+        for firm in firm_level:
+            firm.starting_cash = firm.cash
+            
     # Firms produce goods
-    print()
     firm_handler.calculate_total_hiring_capacity()
     for firm_level in firm_handler.all_firms:
         for firm in firm_level:
             firm.produce_goods()
-            print(firm.firm_type.name, firm.effective_size, firm.good_in_storage_amounts)
     
-    # Have imaginary pops buy all third-level outputs -- assuming population = demand
+    # Have the people buy all third-level outputs
     for firm in firm_handler.all_firms[2]:
         for i in range(0, len(firm.firm_type.output_goods)):
-            amount_to_buy = min(firm.good_in_storage_amounts[i], total_population)
-            firm.cash += amount_to_buy * firm.firm_type.output_goods[i].price
+            amount_to_buy = floor(min(people.cash / firm.firm_type.output_goods[i].price, firm.good_in_storage_amounts[i])) # missing people.size, assuming infinite demand
             firm.good_in_storage_amounts[i] -= amount_to_buy
+            firm.cash += amount_to_buy * firm.firm_type.output_goods[i].price
+            people.cash -= amount_to_buy * firm.firm_type.output_goods[i].price
+            
+    # Firms pay their works half of profits
+    # Prepare firm checkbooks
+    for firm_level in firm_handler.all_firms:
+        for firm in firm_level:
+            # Then split the profits, with 90% going to shareholders / employees and 10% being retained for tomorrow's operations
+            firm.profit = firm.cash - firm.starting_cash
+            if firm.profit > 0:
+                firm.cash -= floor(firm.profit * 9 / 10)
+                people.cash += floor(firm.profit * 9 / 10)
     
     # Firms decide whether to expand or contract
     for firm_level in firm_handler.all_firms:
@@ -148,9 +175,17 @@ while days_left > 0:
         good.update_price()
     
     # Get debug output, useful for graphing to see if money / goods are magically appearing (read: my min statement spaghetti blew up)
-    total_money_in_world = sum(firm.cash for firm_level in firm_handler.all_firms for firm in firm_level)
+    print()
+    for firm_level in firm_handler.all_firms:
+        for firm in firm_level:
+            print(firm.firm_type.name, "$" + str(round(firm.cash)), firm.good_in_storage_amounts)
+    print("People", "$" + str(people.cash))
+    for good in good_handler.all_goods:
+        print(good.name, good.price)
+    total_money_in_world = sum(firm.cash for firm_level in firm_handler.all_firms for firm in firm_level) + people.cash
     with open('output.txt', 'a') as outputtxt:
-        outputtxt.write(str(total_money_in_world) + '\n')
+        outputtxt.write(str(firm_handler.all_firms[0][0].cash) + '\n')
+        # outputtxt.write(str(total_money_in_world) + '\n')
     
     # Iterate to the next day
     days_left -= 1
